@@ -14,6 +14,26 @@ CREATE TABLE content_context (
   context_vector VECTOR(1536)
 )
 
+Required Supabase SQL function for cosine similarity search:
+
+CREATE OR REPLACE FUNCTION match_content_context(
+  query_embedding VECTOR(1536),
+  match_threshold FLOAT,
+  match_count INT
+)
+RETURNS TABLE (id BIGINT, url TEXT, similarity FLOAT)
+LANGUAGE plpgsql AS $$
+BEGIN
+  RETURN QUERY
+  SELECT cc.id, cc.url,
+         1 - (cc.context_vector <=> query_embedding) AS similarity
+  FROM content_context cc
+  WHERE 1 - (cc.context_vector <=> query_embedding) > match_threshold
+  ORDER BY cc.context_vector <=> query_embedding
+  LIMIT match_count;
+END;
+$$;
+
 Required environment variables:
 - OPENAI_API_KEY
 - SUPABASE_URL
@@ -99,6 +119,47 @@ def web_search(query: str, max_results: int = 5) -> str:
 
 
 @tool
+def check_similar_urls_in_supabase(
+    content: str, match_threshold: float = 0.85, match_count: int = 5
+) -> str:
+    """
+    Check Supabase for URLs whose stored content is semantically similar to the given
+    text using cosine similarity on the context_vector column.
+
+    Use this before saving new content to avoid re-processing URLs already seen.
+
+    Args:
+        content: Text to embed and compare against stored content vectors.
+        match_threshold: Minimum cosine similarity score (0.0–1.0). Default 0.85.
+        match_count: Maximum number of similar results to return. Default 5.
+    """
+    embeddings = _get_embeddings_client()
+    vector = embeddings.embed_query(content)
+
+    if len(vector) != 1536:
+        return f"Embedding size mismatch: expected 1536, got {len(vector)}"
+
+    supabase = _get_supabase_client()
+    result = supabase.rpc(
+        "match_content_context",
+        {
+            "query_embedding": vector,
+            "match_threshold": match_threshold,
+            "match_count": match_count,
+        },
+    ).execute()
+
+    matches = result.data or []
+    if not matches:
+        return "No similar URLs found above threshold."
+
+    lines = [f"Found {len(matches)} similar URL(s) already in Supabase:"]
+    for m in matches:
+        lines.append(f"  - id={m['id']} similarity={m['similarity']:.4f} url={m['url']}")
+    return "\n".join(lines)
+
+
+@tool
 def save_content_context_to_supabase(url: str, metadata_json: str, content: str) -> str:
     """
     Save research context into Supabase `content_context` with vector embedding.
@@ -136,16 +197,20 @@ DEEP_RESEARCH_SYSTEM = textwrap.dedent("""\
 
     Your required workflow for research tasks:
     1) Use `web_search` to gather relevant web sources.
-    2) Synthesize and summarize key findings with citations (URLs).
-    3) Persist useful context to Supabase by calling `save_content_context_to_supabase`.
+    2) Before saving a URL, call `check_similar_urls_in_supabase` with a snippet of its
+       content or title to check if semantically similar content is already stored.
+       Skip saving if a match with similarity >= 0.85 already exists.
+    3) Synthesize and summarize key findings with citations (URLs).
+    4) Persist useful context to Supabase by calling `save_content_context_to_supabase`
+       only for URLs that are NOT already seen.
        - Save at least one row per task.
        - metadata_json should include:
          - query
          - saved_at_utc
          - sources (array of URLs)
          - summary_type (e.g., "final_synthesis", "source_note")
-    4) From the results you find, use that as inspiration for more web_searches
-    
+    5) From the results you find, use that as inspiration for more web_searches.
+
     Only stop once you have found at least 100 articles. Make sure to save each one to supabase as you find them!
 
     Never invent sources. Only cite URLs returned by `web_search`.
@@ -161,7 +226,7 @@ def build_deep_research_agent():
         """Return current UTC timestamp in ISO-8601 format."""
         return datetime.now(timezone.utc).isoformat()
 
-    tools = [web_search, save_content_context_to_supabase, utc_now]
+    tools = [web_search, check_similar_urls_in_supabase, save_content_context_to_supabase, utc_now]
     agent = create_react_agent(
         llm,
         tools,

@@ -16,6 +16,7 @@ Prerequisites:
 import os
 
 from langchain_core.tools import tool
+from langchain_core.messages import SystemMessage
 from langgraph.prebuilt import create_react_agent
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from app.config import get_llm
@@ -56,7 +57,7 @@ def _extract_final_text_from_messages(messages: list) -> str:
     return ""
 
 
-async def _build_mcp_agent_for_servers(servers: dict, extra_tools: list | None = None):
+async def _build_mcp_agent_for_servers(servers: dict, extra_tools: list | None = None, system_prompt="You are a helpful assistant"):
     """
     Connect to MCP servers, discover tools, and create a ReAct agent.
 
@@ -78,10 +79,14 @@ async def _build_mcp_agent_for_servers(servers: dict, extra_tools: list | None =
     client = MultiServerMCPClient(servers)
     tools = await client.get_tools()
 
+    for t in tools:
+        print(t.name)
+    # filtered_tools = filter(lambda x:x.name!="create_issue",tools)
+
     if extra_tools:
         tools = [*tools, *extra_tools]
 
-    return create_react_agent(llm, tools)
+    return create_react_agent(llm, tools, prompt=SystemMessage(content=system_prompt))
 
 
 @tool
@@ -89,8 +94,8 @@ async def ask_linear_agent(query: str) -> str:
     """
     Delegate a task to the Linear MCP agent and return its final answer.
 
-    Use this tool when the GitHub-focused agent needs Linear context
-    (issues, projects, cycles, teams, users, etc).
+    Use this tool when the agent needs Linear context
+    (to create issues, to view projects, view cycles, teams, users, etc).
     """
     linear_agent = await _build_mcp_agent_for_servers({"linear": MCP_SERVER_LINEAR})
     result = await linear_agent.ainvoke(
@@ -105,7 +110,8 @@ async def build_github_mcp_agent():
     """Build a GitHub-dedicated MCP agent with a bridge tool to call the Linear agent."""
     return await _build_mcp_agent_for_servers(
         {"github": MCP_SERVER_GITHUB},
-        extra_tools=[ask_linear_agent],
+        extra_tools=[ask_linear_agent]
+        # system_prompt="You are a coding assistant you look at pull requests and issue. When creating issues only use linear"
     )
 
 
