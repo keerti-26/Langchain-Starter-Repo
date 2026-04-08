@@ -1,0 +1,3 @@
+key,value
+user_info,"Keerti, a data engineer"
+stateless_vs_stateful_agents,"Stateless agents do not retain any information about past interactions and treat each request independently, while stateful agents maintain a memory of past interactions, allowing them to provide more context-aware responses."
