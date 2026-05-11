@@ -1,6 +1,6 @@
 # LangChain Starter Agent
 
-A minimal FastAPI app with two LangChain agent endpoints powered by [LangGraph](https://langchain-ai.github.io/langgraph/), now with a lightweight browser frontend.
+A minimal FastAPI app with LangChain agent endpoints powered by [LangGraph](https://langchain-ai.github.io/langgraph/), now with a lightweight browser frontend.
 
 ## Endpoints
 
